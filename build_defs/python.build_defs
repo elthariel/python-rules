@@ -95,7 +95,7 @@ def python_library(name:str, srcs:list=[], resources:list=[], deps:list=[], visi
 def python_binary(name:str, main:str, srcs:list=[], resources:list=[], out:str=None, deps:list=[],
                   data:list=None, visibility:list=None, test_only:bool=False, zip_safe:bool=None,
                   site:bool=False, strip:bool=False, interpreter:str=CONFIG.PYTHON.DEFAULT_INTERPRETER,
-                  shebang:str='', labels:list&features&tags=[]):
+                  shebang:str='', labels:list&features&tags=[], content_stamp:bool=False):
     """Generates a Python binary target.
 
     This compiles all source files together into a single .pex file which can
@@ -128,22 +128,14 @@ def python_binary(name:str, main:str, srcs:list=[], resources:list=[], out:str=N
       shebang (str): Exact shebang to apply to the generated file. By default we will
                      determine something appropriate for the given interpreter.
       labels (list): Labels to apply to this rule.
+      content_stamp(bool): Use the built content as the pex_stamp source to build the extract
+                           path for non-zip-safe path instead of the rule hash. Default to False
     """
-    shebang = shebang or _interpreter_cmd(interpreter)
-    zipsafe_flag = '' if zip_safe is False else '--zip_safe'
-    cmd = '$TOOLS_PEX -s "%s" -m "%s" %s --interpreter_options="%s" --stamp="$RULE_HASH"' % (
-        shebang, CONFIG.PYTHON.MODULE_DIR, zipsafe_flag, CONFIG.PYTHON.INTERPRETER_OPTIONS)
-    if site:
-        cmd += ' -S'
-
-    if CONFIG.BUILD_CONFIG == 'dbg':
-        # Both `pdb` and `debugpy` require the pex to be exploded to get debugging to work.
-        cmd = f'{cmd} -d={CONFIG.PYTHON.DEBUGGER}'.replace(' --zip_safe', '')
-
     assert main not in srcs, "main file should not be included in srcs"
 
+    lib_rule_name = '_%s#lib' % name
     lib_rule = python_library(
-        name='_%s#lib' % name,
+        name=lib_rule_name,
         srcs=[main] + srcs,
         resources=resources,
         interpreter=interpreter,
@@ -151,6 +143,23 @@ def python_binary(name:str, main:str, srcs:list=[], resources:list=[], out:str=N
         visibility=visibility,
         test_only=test_only,
     )
+
+    shebang = shebang or _interpreter_cmd(interpreter)
+    zipsafe_flag = '' if zip_safe is False else '--zip_safe'
+    cmd = '$TOOLS_PEX -s "%s" -m "%s" %s --interpreter_options="%s"' % (
+        shebang, CONFIG.PYTHON.MODULE_DIR, zipsafe_flag, CONFIG.PYTHON.INTERPRETER_OPTIONS)
+
+    if content_stamp:
+        content_stamp_value = $(hash f":{lib_rule_name}")
+        cmd += f' --stamp="{content_stamp_value}"'
+    else:
+        cmd += ' --stamp="$RULE_HASH"'
+    if site:
+        cmd += ' -S'
+
+    if CONFIG.BUILD_CONFIG == 'dbg':
+        # Both `pdb` and `debugpy` require the pex to be exploded to get debugging to work.
+        cmd = f'{cmd} -d={CONFIG.PYTHON.DEBUGGER}'.replace(' --zip_safe', '')
 
     # Use the pex tool to compress the entry point & add all the bootstrap helpers etc.
     pex_rule = build_rule(
@@ -729,4 +738,3 @@ if CONFIG.BAZEL_COMPATIBILITY:
     py_library = python_library
     py_binary = python_binary
     py_test = python_test
-
